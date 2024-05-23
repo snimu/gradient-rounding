@@ -403,6 +403,12 @@ def get_grad_norm(net):
     return grad_norm
 
 
+def round_gradients(net, digits):
+    for p in net.parameters():
+        if p.grad is not None:
+            p.grad.data = p.grad.data.round(digits)
+
+
 def grow_sequence_length(old_length, old_batchsize):
     # Dynamically grows the sequence length and changes the batchsize to avoid OOMs
     new_length        = min(2*old_length, hyp['misc']['sequence_length']['max'])
@@ -589,6 +595,9 @@ def train(net: SpeedyLangNet | None = None, **settings):
         loss = loss_fn(outputs.flatten(0, 1), targets.flatten(0, 1))
 
         loss.div(discrete_sampled_microbatch_steps).backward()
+        # After calculating the loss and backpropagating, round the gradient
+        round_gradients(net, settings['gradient_rounding_digits'])
+
         tokens_seen += curr_batchsize * curr_length
         epoch = tokens_seen/len(data['train'])
 
@@ -820,6 +829,12 @@ def get_args() -> argparse.Namespace:
         help="Eval at after at most this many epochs. "
         "TYPE: float; DEFAULT: 0.25"
     )
+    parser.add_argument(
+        "--gradient_rounding_digits",
+        type=int, default=16, nargs="+",
+        help="Round the gradient norm to this many digits. "
+        "TYPE: int; DEFAULT: 16"
+    )
 
     # Model settings
     parser.add_argument(
@@ -899,6 +914,7 @@ def get_args() -> argparse.Namespace:
     args.depth = [None if d < 1 else d for d in args.depth]
     args.width = [None if w < 1 else w for w in args.width]
     args.num_heads = [args.num_heads] if isinstance(args.num_heads, int) else args.num_heads
+    args.gradient_rounding_digits = [args.gradient_rounding_digits] if isinstance(args.gradient_rounding_digits, int) else args.gradient_rounding_digits
 
     args.model_scale = [args.model_scale] if isinstance(args.model_scale, float) else args.model_scale
     args.linear_value = [args.linear_value] if isinstance(args.linear_value, int) else args.linear_value
@@ -935,18 +951,19 @@ def get_settings(args: argparse.Namespace) -> list:
     # and you can handle that here.
 
     settings =  list(itertools.product(
-        args.model_scale, args.depth, args.width, args.num_heads, args.linear_value
+        args.model_scale, args.depth, args.width, args.num_heads, args.linear_value, args.gradient_rounding_digits,
     ))
 
     settings = [
-        (model_scale, depth, width, num_heads, linear_value) 
-        for model_scale, depth, width, num_heads, linear_value in settings 
+        (model_scale, depth, width, num_heads, linear_value, gradient_rounding_digits) 
+        for model_scale, depth, width, num_heads, linear_value, gradient_rounding_digits in settings 
         if not setting_violates_rules(
             model_scale=model_scale, 
             depth=depth, 
             width=width, 
             num_heads=num_heads, 
             linear_value=linear_value,
+            gradient_rounding_digits=gradient_rounding_digits,
         )
     ]
 
@@ -968,7 +985,7 @@ def main():
     settings = get_settings(args)
 
     if args.review_settings:
-        print_settings(settings, names=["model_scale", "depth", "width", "num_heads", "linear_value"])
+        print_settings(settings, names=["model_scale", "depth", "width", "num_heads", "linear_value", "gradient_rounding_digits"])
         proceed = input("Proceed? [y/n] ")
         if proceed.lower() != "y":
             print("Aborting.")
@@ -980,7 +997,7 @@ def main():
     global hyp, model_scale
     change_gpu_token_capacity(args.gpu_capacity_scalar)
 
-    for setting_num, (model_scale, depth, width, num_heads, linear_value) in enumerate(settings):
+    for setting_num, (model_scale, depth, width, num_heads, linear_value, gradient_rounding_digits) in enumerate(settings):
         seed = args.seed  # reset seed so that every setting goes through the same seeds over the different runs
 
         # Change the model scale; width is rounded to nearest 64, and both are None if scaled by model_scale -> get depth and width here
@@ -998,7 +1015,8 @@ def main():
                 f":::    {depth=}\n"
                 f":::    {width=}\n"
                 f":::    {num_params=}\n"
-                f":::    {num_non_embedding_params=}"
+                f":::    {num_non_embedding_params=}\n"
+                f":::    {gradient_rounding_digits=}"
             )
             max_len = max(len(line) for line in title.split("\n"))
             title = "\n".join([line + " " * (max_len - len(line)) + " :::" for line in title.split("\n")])
@@ -1040,6 +1058,7 @@ def main():
                 tokens_per_batch_capacity=tokens_per_batch_capacity,
                 max_sequence_length=max_sequence_length,
                 seed=seed,
+                gradient_rounding_digits=gradient_rounding_digits,
             )
 
             # You can do whatever you want with your net here; I delete it to save VRAM
@@ -1048,6 +1067,7 @@ def main():
             # Save results
             results = {
                 "last_val_loss": [last_val_loss],
+                "gradient_rounding_digits": [gradient_rounding_digits],
                 "model_scale": [model_scale],
                 "depth": [hyp['net']['num_blocks']],
                 "width": [hyp['net']['residual_depth']],
