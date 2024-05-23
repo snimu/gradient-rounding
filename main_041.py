@@ -406,7 +406,7 @@ def get_grad_norm(net):
 def round_gradients(net, digits):
     for p in net.parameters():
         if p.grad is not None:
-            p.grad.data = p.grad.data.round(digits)
+            p.grad.data = p.grad.data.round(decimals=digits)
 
 
 def grow_sequence_length(old_length, old_batchsize):
