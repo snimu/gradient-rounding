@@ -587,7 +587,7 @@ def train(net: SpeedyLangNet | None = None, **settings):
     stop_run = False
 
     # Main loop. Most of the complexity here is in the dynamic growing scheduler(s).
-    while curr_step < hyp['opt']['total_train_steps']:
+    while True:
         inputs, targets = get_batch(data, key='train', batchsize=curr_batchsize, length=curr_length)
 
         outputs = net(inputs)
@@ -616,7 +616,7 @@ def train(net: SpeedyLangNet | None = None, **settings):
             stop_run = True
 
         # Quick non-eval summary every N training steps, at the end of every microbatch group, including when we are not doing a _full eval_ here so that the resulting stats are complete
-        if curr_step % 10 == 0 and curr_microbatch_step % discrete_sampled_microbatch_steps == 0:
+        if do_eval or (curr_step % 10 == 0 and curr_microbatch_step % discrete_sampled_microbatch_steps == 0):
             train_acc          = (outputs.detach().argmax(-1) == targets).float().mean().item()
             train_loss         = loss.detach().cpu().item()
 
