@@ -728,8 +728,7 @@ def train(net: SpeedyLangNet | None = None, **settings):
 
             # Print out our training details
             ## We also check to see if we're on our final eval loop (assum that max_curr_step lines up with the eval_every value) so we can print the 'bottom' of the table for each round.
-            is_final_eval = stop_run or (curr_step >= hyp['opt']['total_train_steps']) # If we're at the end of training, add a line after the end of the run
-            print_training_details(format_for_table(variables_to_log, locals=locals()), is_final_entry=is_final_eval)
+            print_training_details(format_for_table(variables_to_log, locals=locals()), is_final_entry=stop_run)
 
             torch.cuda.synchronize()
             starter.record()
