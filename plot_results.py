@@ -21,15 +21,26 @@ def series_to_array(series: pl.Series) -> np.ndarray:
         return np.array(ast.literal_eval(series))
 
 
-def format_num_params(num_params: int) -> str:
+def format_num_params(num_params: int, round_to_digits: int = 1) -> str:
     if num_params < 1_000:
-        return str(num_params)
+        pnum = str(round(num_params, max(0, round_to_digits)))
+        scalar = ""
     elif num_params < 1_000_000:
-        return f"{num_params/1_000:.1f}k"
+        pnum = f"{round(num_params/1_000, max(0, round_to_digits))}"
+        scalar = "k"
     elif num_params < 1_000_000_000:
-        return f"{num_params/1_000_000:.1f}M"
+        pnum = f"{round(num_params/1_000_000, max(0, round_to_digits))}"
+        scalar = "M"
     else:
-        return f"{num_params/1_000_000_000:.1f}B"
+        pnum = f"{round(num_params/1_000_000_000, max(0, round_to_digits))}"
+        scalar = "B"
+
+    before_dot = pnum.split(".")[0]
+    after_dot = pnum.split(".")[1] if "." in pnum else ""
+    after_dot = "" if after_dot and (round_to_digits <= 0) else after_dot
+    after_dot = "" if after_dot and (int(after_dot) == 0) else after_dot
+
+    return f"{before_dot}{after_dot}{scalar}"
 
 
 def load_xs_ys_avg_y(
@@ -43,7 +54,7 @@ def load_xs_ys_avg_y(
         num_heads: int | None = None,
         run_num: int | None = None,
         seed: int | None = None,
-        to_plot: Literal["val_loss", "train_losses", "val_accs", "train_accs", "val_pplxs", "train_pplxs"] = "val_loss",
+        to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs", "train_pplxs"] = "val_loss",
         plot_over: Literal["step", "epoch", "token", "time_sec"] = "step",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load x, y, and average y from a CSV file."""
@@ -204,7 +215,7 @@ def generate_distinct_colors(n):
     return colors
 
 
-def unique_num_params(file: str) -> list[int]:
+def unique_num_params(file: str) -> np.ndarray:
     return (
         pl.scan_csv(file)
         .select("num_params")
@@ -215,7 +226,7 @@ def unique_num_params(file: str) -> list[int]:
     )
 
 
-def unique_widths(file: str) -> list[int]:
+def unique_widths(file: str) -> np.ndarray:
     return (
         pl.scan_csv(file)
         .select("width")
@@ -226,7 +237,7 @@ def unique_widths(file: str) -> list[int]:
     )
 
 
-def unique_depths(file: str) -> list[int]:
+def unique_depths(file: str) -> np.ndarray:
     return (
         pl.scan_csv(file)
         .select("depth")
@@ -237,13 +248,25 @@ def unique_depths(file: str) -> list[int]:
     )
 
 
+def unique_gradient_rounding_digits(file: str) -> np.ndarray:
+    return (
+        pl.scan_csv(file)
+        .select("gradient_rounding_digits")
+        .collect()
+        ["gradient_rounding_digits"]
+        .unique()
+        .to_numpy()
+    )
+
+
 def plot_performance(
         file: str,
         depth: int | None = 8,
         width: int | None = 384,
         num_heads: int | None = None,
-        gradient_rounding_digits: int | None = 16,
-        to_plot: Literal["val_loss", "train_losses", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
+        gradient_rounding_digits: int | list[int] | None = 16,
+        from_percentage: float = 0.0,
+        to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
         plot_over: Literal["step", "epoch", "epoch_unique_token", "token", "time_sec"] = "epoch",
         show: bool = True,
         loglog: bool = False,
@@ -258,7 +281,8 @@ def plot_performance(
     if width is not None:
         settings = [(nh, d, w, rd) for nh, d, w, rd in settings if w == width]
     if gradient_rounding_digits is not None:
-        settings = [(nh, d, w, rd) for nh, d, w, rd in settings if rd == gradient_rounding_digits]
+        gradient_rounding_digits = [gradient_rounding_digits] if isinstance(gradient_rounding_digits, int) else gradient_rounding_digits
+        settings = [(nh, d, w, rd) for nh, d, w, rd in settings if rd in gradient_rounding_digits]
 
     colors = generate_distinct_colors(len(settings))
 
@@ -273,6 +297,13 @@ def plot_performance(
                 to_plot=to_plot,
                 plot_over=plot_over,
             )
+
+            if from_percentage > 0.0:
+                from_idx = int(from_percentage * len(xs))
+                xs = xs[from_idx:]
+                ys = ys[:, from_idx:]
+                avg_ys = avg_ys[from_idx:]
+
             if plot_all:
                 for y in ys:
                     if loglog:
@@ -308,24 +339,280 @@ def plot_performance(
     if show:
         plt.show()
     else:
-        # You should probably adjust the filename
-        plt.savefig(f"{to_plot}_vs_{plot_over}.png", dpi=300)
+        name = f"{to_plot}_vs_{plot_over}_from_percentage_{from_percentage}"
+        if depth is not None:
+            name += f"_depth_{depth}"
+        if width is not None:
+            name += f"_width_{width}"
+        if num_heads is not None:
+            name += f"_num_heads_{num_heads}"
+        if gradient_rounding_digits is not None:
+            name += f"_digits_{min(gradient_rounding_digits)}_to_{max(gradient_rounding_digits)}"
+        if len(ys) > 1:
+            name += f"_{len(ys)}_tries"
+        plt.savefig(f"results/images/{name}.png", dpi=300)
     close_plt()  # in case you call this function multiple times with different settings
+
+
+def heatmap_l2_dist_losses_by_size(
+        file: str,
+        to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
+        min_digits: int = 0,
+        show: bool = True,
+) -> None:
+    digits = unique_gradient_rounding_digits(file)
+    max_digits = max(digits)
+    digits = [d for d in digits if d >= min_digits and d != max_digits]
+    param_nums = unique_num_params(file)
+
+    results = np.zeros((len(param_nums), len(digits)))
+    for pidx, num_params in enumerate(param_nums):
+        for didx, digit in enumerate(digits):
+            xs1, _, avg_ys1 = load_xs_ys_avg_y(
+                file,
+                num_params=num_params,
+                gradient_rounding_digits=digit,
+                to_plot=to_plot,
+                plot_over="epoch",
+            )
+            xs2, _, avg_ys2 = load_xs_ys_avg_y(
+                file,
+                num_params=num_params,
+                gradient_rounding_digits=max_digits,
+                to_plot=to_plot,
+                plot_over="epoch",
+            )
+            # Make the two arrays the same length
+            xs = xs1 if xs1[-1] < xs2[-1] else xs2
+            avg_ys1 = np.interp(xs, xs1, avg_ys1)
+            avg_ys2 = np.interp(xs, xs2, avg_ys2)
+            l2_dist = np.linalg.norm(avg_ys1 - avg_ys2)
+            results[pidx, didx] = l2_dist
+
+    fig, ax = plt.subplots()
+    cax = ax.matshow(results, cmap="viridis")
+    cbar = fig.colorbar(cax)
+    cbar.set_label(f"L2 distance to {max_digits} gradient rounding digits")
+
+    yticklabels = []
+    for i in range(len(param_nums)):
+        # Write the values in the heatmap in white
+        for j in range(len(digits)):
+            results_text = f"{results[i, j]:.2f}"
+            while len(results_text) > 4:  # > x.xx
+                results_text = results_text[:-1]
+            if results_text.endswith("."):
+                results_text = results_text[:-1]
+            ax.text(j, i, results_text, ha="center", va="center", color="white")
+        
+        # Complete the yticklabels in the format "depth, width (#params)"
+        width = pl.scan_csv(file).filter(pl.col("num_params") == param_nums[i]).collect()["width"][0]
+        depth = pl.scan_csv(file).filter(pl.col("num_params") == param_nums[i]).collect()["depth"][0]
+        yticklabels.append(f"{depth} / {width} / {format_num_params(param_nums[i])}")
+
+    ax.set_xticks(np.arange(len(digits)))
+    ax.set_yticks(np.arange(len(param_nums)))
+    ax.xaxis.set_ticks_position("bottom")
+    ax.set_xticklabels(digits)
+    ax.set_yticklabels(yticklabels)
+    plt.xlabel("digits")
+    plt.ylabel("depth / width / #params")
+
+    # Increase plot-size
+    fig = plt.gcf()
+    fig.set_size_inches(10, 7)
+
+    # Reduce whitespace
+    fig.subplots_adjust(left=0.1, right=0.87, top=0.9, bottom=0.1)
+
+    plt.title(f"L2 distance of {to_plot} between n and {max_digits} rounding digits")
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.savefig(
+            f"results/images/l2_dist_{to_plot}"
+            f"_{len(param_nums)}_modelsizes_"
+            f"{max_digits}_max_digits_{min_digits}_min_digits.png", 
+            dpi=300,
+        )
+
+
+def plot_fourier_transform_of_loss_curves_heatmap(
+        file: str,
+        to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
+        plot_over: Literal["step", "epoch", "epoch_unique_token", "token", "time_sec"] = "epoch",
+        min_digits: int = 0,
+        draw_numbers: bool = False,
+        show: bool = True,
+):
+    param_nums = unique_num_params(file)
+    gradient_rounding_digits = unique_gradient_rounding_digits(file)
+    gradient_rounding_digits = [d for d in gradient_rounding_digits if d >= min_digits]
+
+    fft_means = []
+    for num_params in param_nums:
+        fft_means_for_num_params = []
+        for digits in gradient_rounding_digits:
+            xs, ys, avg_ys = load_xs_ys_avg_y(
+                file,
+                num_params=num_params,
+                gradient_rounding_digits=digits,
+                to_plot=to_plot,
+                plot_over=plot_over,
+            )
+
+            # Fourier transform
+            fft_values = np.fft.fft(avg_ys)
+            fft_freq = np.fft.fftfreq(len(xs))
+            amplitudes = np.abs(fft_values)
+            fft_mean = np.sum(amplitudes * np.abs(fft_freq)) / np.sum(amplitudes)
+            fft_means_for_num_params.append(fft_mean)
+        fft_means.append(fft_means_for_num_params)
+
+    fig, ax = plt.subplots()
+    cax = ax.matshow(np.array(fft_means), cmap="viridis")
+    cbar = fig.colorbar(cax)
+    cbar.set_label("Bla")
+
+    yticklabels = []
+    for i in range(len(param_nums)):
+        # Write the values in the heatmap in white
+        if draw_numbers:
+            for j in range(len(gradient_rounding_digits)):
+                results_text = f"{fft_means[i][j]:.2f}"
+                while len(results_text) > 4:  # > x.xx
+                    results_text = results_text[:-1]
+                if results_text.endswith("."):
+                    results_text = results_text[:-1]
+                ax.text(j, i, results_text, ha="center", va="center", color="white")
+        
+        # Complete the yticklabels in the format "depth, width (#params)"
+        width = pl.scan_csv(file).filter(pl.col("num_params") == param_nums[i]).collect()["width"][0]
+        depth = pl.scan_csv(file).filter(pl.col("num_params") == param_nums[i]).collect()["depth"][0]
+        yticklabels.append(f"{depth} / {width} / {format_num_params(param_nums[i])}")
+
+    ax.set_xticks(np.arange(len(gradient_rounding_digits)))
+    ax.set_yticks(np.arange(len(param_nums)))
+    ax.xaxis.set_ticks_position("bottom")
+    ax.set_xticklabels(gradient_rounding_digits)
+    ax.set_yticklabels(yticklabels)
+    plt.xlabel("digits")
+    plt.ylabel("depth / width / #params")
+
+    # Increase plot-size
+    fig = plt.gcf()
+    fig.set_size_inches(7, 7)
+
+    # Reduce whitespace
+    fig.subplots_adjust(left=0.1, right=0.87, top=0.9, bottom=0.1)
+
+    plt.title(f"Mean frequency of {to_plot} (calculated with FFT)")
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.savefig(
+            f"results/images/fft_mean_{to_plot}"
+            f"_{len(param_nums)}_modelsizes_"
+            f"{len(gradient_rounding_digits)}_digits"
+            f"_{min_digits}_min_digits.png", 
+            dpi=300,
+        )
+
+
+def plot_mean_fourier_freq_over_gradient_rounding_digits(
+        file: str,
+        to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
+        plot_over: Literal["step", "epoch", "epoch_unique_token", "token", "time_sec"] = "epoch",
+        min_digits: int = 0,
+        show: bool = True,
+):
+    param_nums = unique_num_params(file)
+    gradient_rounding_digits = unique_gradient_rounding_digits(file)
+    gradient_rounding_digits = [d for d in gradient_rounding_digits if d >= min_digits]
+
+    fft_means = []
+    for num_params in param_nums:
+        fft_means_for_num_params = []
+        for digits in gradient_rounding_digits:
+            xs, ys, avg_ys = load_xs_ys_avg_y(
+                file,
+                num_params=num_params,
+                gradient_rounding_digits=digits,
+                to_plot=to_plot,
+                plot_over=plot_over,
+            )
+
+            # Fourier transform
+            fft_values = np.fft.fft(avg_ys)
+            fft_freq = np.fft.fftfreq(len(xs))
+            amplitudes = np.abs(fft_values)
+            fft_mean = np.sum(amplitudes * np.abs(fft_freq)) / np.sum(amplitudes)
+            fft_means_for_num_params.append(fft_mean)
+        fft_means.append(fft_means_for_num_params)
+
+    for i, num_params in enumerate(param_nums):
+        depth = pl.scan_csv(file).filter(pl.col("num_params") == num_params).collect()["depth"][0]
+        width = pl.scan_csv(file).filter(pl.col("num_params") == num_params).collect()["width"][0]
+        plt.plot(gradient_rounding_digits, fft_means[i], label=f"{depth=}, {width=} ({format_num_params(num_params)})")
+
+    fig = plt.gcf()
+    fig.set_size_inches(12, 7)
+    plt.xlabel("#digits")
+    plt.ylabel("Mean frequency")
+    plt.legend()
+    plt.grid()
+    plt.title(f"Mean frequency of {to_plot} (calculated with FFT) over #digits")
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.savefig(
+            f"results/images/fft_mean_{to_plot}"
+            f"_{len(param_nums)}_modelsizes_"
+            f"{len(gradient_rounding_digits)}_digits"
+            f"_{min_digits}_min_digits.png", 
+            dpi=300,
+        )
+    close_plt()
 
 
 if __name__ == "__main__":
     file_digits = "results/results_digits.csv"
     file_10_tries = "results/results_10_tries.csv"
+    file_digits_and_scale = "results/results_digits_and_scale.csv"
     
     plot_performance(
-        file=file_digits,
-        depth=8,
-        width=384,
-        gradient_rounding_digits=None,
+        file=file_digits_and_scale,
+        depth=None,
+        width=None,
+        gradient_rounding_digits=16,
         num_heads=1,
-        to_plot="val_loss",
+        from_percentage=0.6,
+        to_plot="train_loss",
         plot_over="token",
         show=True,
         loglog=False,
         plot_all=False,
     )
+    # heatmap_l2_dist_losses_by_size(
+    #     file=file_digits_and_scale,
+    #     to_plot="val_loss",
+    #     min_digits=0,
+    #     show=False,
+    # )
+    # plot_fourier_transform_of_loss_curves_heatmap(
+    #     file=file_digits_and_scale,
+    #     to_plot="val_loss",
+    #     plot_over="epoch",
+    #     min_digits=7,
+    #     show=False,
+    # )
+    # plot_mean_fourier_freq_over_gradient_rounding_digits(
+    #     file=file_digits_and_scale,
+    #     to_plot="val_loss",
+    #     plot_over="epoch",
+    #     min_digits=7,
+    #     show=True,
+    # )
