@@ -39,6 +39,7 @@ def format_num_params(num_params: int, round_to_digits: int = 1) -> str:
     after_dot = pnum.split(".")[1] if "." in pnum else ""
     after_dot = "" if after_dot and (round_to_digits <= 0) else after_dot
     after_dot = "" if after_dot and (int(after_dot) == 0) else after_dot
+    after_dot = "." + after_dot if after_dot else ""
 
     return f"{before_dot}{after_dot}{scalar}"
 
@@ -438,6 +439,99 @@ def heatmap_l2_dist_losses_by_size(
         )
 
 
+def heatmap_l2_dist_to_largest_model(
+        file: str,
+        to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
+        min_digits: int = 0,
+        show: bool = True,
+        measure: Literal["L1", "L2"] = "L2",
+) -> None:
+    digits = unique_gradient_rounding_digits(file)
+    digits = [d for d in digits if d >= min_digits]
+    param_nums = unique_num_params(file)
+    max_param_nums = max(param_nums)
+    param_nums = [p for p in param_nums if p != max_param_nums]
+
+    results = np.zeros((len(param_nums), len(digits)))
+    for pidx, num_params in enumerate(param_nums):
+        for didx, digit in enumerate(digits):
+            xs1, _, avg_ys1 = load_xs_ys_avg_y(
+                file,
+                num_params=num_params,
+                gradient_rounding_digits=digit,
+                to_plot=to_plot,
+                plot_over="epoch",
+            )
+            xs2, _, avg_ys2 = load_xs_ys_avg_y(
+                file,
+                num_params=max_param_nums,
+                gradient_rounding_digits=digit,
+                to_plot=to_plot,
+                plot_over="epoch",
+            )
+            # Make the two arrays the same length
+            xs = xs1 if xs1[-1] < xs2[-1] else xs2
+            avg_ys1 = np.interp(xs, xs1, avg_ys1)
+            avg_ys2 = np.interp(xs, xs2, avg_ys2)
+            if measure == "L1":
+                l2_dist = np.linalg.norm(avg_ys1 - avg_ys2, ord=1)
+            elif measure == "L2":
+                l2_dist = np.linalg.norm(avg_ys1 - avg_ys2)
+            else:
+                raise ValueError(f"Measure {measure} not supported")
+            results[pidx, didx] = l2_dist
+
+    fig, ax = plt.subplots()
+    cax = ax.matshow(results, cmap="viridis")
+    cbar = fig.colorbar(cax)
+    cbar.set_label(f"L2 distance to largest model ({format_num_params(max_param_nums, 0)})")
+
+    yticklabels = []
+    for i in range(len(param_nums)):
+        # Write the values in the heatmap in white
+        for j in range(len(digits)):
+            results_text = f"{results[i, j]:.2f}"
+            while len(results_text) > 4:  # > x.xx
+                results_text = results_text[:-1]
+            if results_text.endswith("."):
+                results_text = results_text[:-1]
+            ax.text(j, i, results_text, ha="center", va="center", color="white")
+        
+        # Complete the yticklabels in the format "depth, width (#params)"
+        width = pl.scan_csv(file).filter(pl.col("num_params") == param_nums[i]).collect()["width"][0]
+        depth = pl.scan_csv(file).filter(pl.col("num_params") == param_nums[i]).collect()["depth"][0]
+        yticklabels.append(f"{depth} / {width} / {format_num_params(param_nums[i])}")
+
+    ax.set_xticks(np.arange(len(digits)))
+    ax.set_yticks(np.arange(len(param_nums)))
+    ax.xaxis.set_ticks_position("bottom")
+    ax.set_xticklabels(digits)
+    ax.set_yticklabels(yticklabels)
+    plt.xlabel("digits")
+    plt.ylabel("depth / width / #params")
+
+    # Increase plot-size
+    fig = plt.gcf()
+    fig.set_size_inches(10, 6)
+
+    # Reduce whitespace
+    fig.subplots_adjust(left=0.1, right=0.87, top=0.9, bottom=0.1)
+
+    plt.title(f"L2 distance of {to_plot} to {format_num_params(max_param_nums)} params")
+    plt.tight_layout()
+    if show:
+        plt.show()
+    else:
+        plt.savefig(
+            f"results/images/l2_dist_{to_plot}_to_largest_model"
+            f"_{len(param_nums)}_modelsizes_"
+            f"{len(digits)}_digits_"
+            f"{max_param_nums}_max_param_nums.png", 
+            dpi=300,
+        )
+    close_plt()
+
+
 def plot_fourier_transform_of_loss_curves_heatmap(
         file: str,
         to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
@@ -583,19 +677,19 @@ if __name__ == "__main__":
     file_10_tries = "results/results_10_tries.csv"
     file_digits_and_scale = "results/results_digits_and_scale.csv"
     
-    plot_performance(
-        file=file_digits_and_scale,
-        depth=None,
-        width=None,
-        gradient_rounding_digits=16,
-        num_heads=1,
-        from_percentage=0.6,
-        to_plot="train_loss",
-        plot_over="token",
-        show=True,
-        loglog=False,
-        plot_all=False,
-    )
+    # plot_performance(
+    #     file=file_digits_and_scale,
+    #     depth=None,
+    #     width=None,
+    #     gradient_rounding_digits=16,
+    #     num_heads=1,
+    #     from_percentage=0.6,
+    #     to_plot="train_loss",
+    #     plot_over="token",
+    #     show=True,
+    #     loglog=False,
+    #     plot_all=False,
+    # )
     # heatmap_l2_dist_losses_by_size(
     #     file=file_digits_and_scale,
     #     to_plot="val_loss",
@@ -616,3 +710,10 @@ if __name__ == "__main__":
     #     min_digits=7,
     #     show=True,
     # )
+    heatmap_l2_dist_to_largest_model(
+        file=file_digits_and_scale,
+        to_plot="val_loss",
+        min_digits=6,
+        show=True,
+        measure="L1",
+    )
