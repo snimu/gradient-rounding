@@ -359,6 +359,7 @@ def heatmap_l2_dist_losses_by_size(
         file: str,
         to_plot: Literal["val_loss", "train_loss", "val_accs", "train_accs", "val_pplxs"] = "val_loss",
         min_digits: int = 0,
+        num_heads: int | None = None,
         show: bool = True,
 ) -> None:
     digits = unique_gradient_rounding_digits(file)
@@ -374,6 +375,7 @@ def heatmap_l2_dist_losses_by_size(
                 num_params=num_params,
                 gradient_rounding_digits=digit,
                 to_plot=to_plot,
+                num_heads=num_heads,
                 plot_over="epoch",
             )
             xs2, _, avg_ys2 = load_xs_ys_avg_y(
@@ -381,6 +383,7 @@ def heatmap_l2_dist_losses_by_size(
                 num_params=num_params,
                 gradient_rounding_digits=max_digits,
                 to_plot=to_plot,
+                num_heads=num_heads,
                 plot_over="epoch",
             )
             # Make the two arrays the same length
@@ -434,7 +437,8 @@ def heatmap_l2_dist_losses_by_size(
         plt.savefig(
             f"results/images/l2_dist_{to_plot}"
             f"_{len(param_nums)}_modelsizes_"
-            f"{max_digits}_max_digits_{min_digits}_min_digits.png", 
+            f"{max_digits}_max_digits_{min_digits}_min_digits"
+            f"_{num_heads}_heads.png", 
             dpi=300,
         )
 
@@ -567,7 +571,7 @@ def plot_fourier_transform_of_loss_curves_heatmap(
     fig, ax = plt.subplots()
     cax = ax.matshow(np.array(fft_means), cmap="viridis")
     cbar = fig.colorbar(cax)
-    cbar.set_label("Bla")
+    cbar.set_label("Mean weighted frequency of loss curve")
 
     yticklabels = []
     for i in range(len(param_nums)):
@@ -596,7 +600,7 @@ def plot_fourier_transform_of_loss_curves_heatmap(
 
     # Increase plot-size
     fig = plt.gcf()
-    fig.set_size_inches(7, 7)
+    fig.set_size_inches(7.5, 7)
 
     # Reduce whitespace
     fig.subplots_adjust(left=0.1, right=0.87, top=0.9, bottom=0.1)
@@ -678,12 +682,12 @@ if __name__ == "__main__":
     file_digits_and_scale = "results/results_digits_and_scale.csv"
     
     # plot_performance(
-    #     file=file_digits_and_scale,
+    #     file=file_10_tries,
     #     depth=None,
-    #     width=None,
-    #     gradient_rounding_digits=16,
+    #     width=384,
+    #     gradient_rounding_digits=[8, 16],
     #     num_heads=1,
-    #     from_percentage=0.6,
+    #     from_percentage=0.3,
     #     to_plot="train_loss",
     #     plot_over="token",
     #     show=True,
@@ -694,15 +698,16 @@ if __name__ == "__main__":
     #     file=file_digits_and_scale,
     #     to_plot="val_loss",
     #     min_digits=0,
-    #     show=False,
+    #     num_heads=1,
+    #     show=True,
     # )
-    # plot_fourier_transform_of_loss_curves_heatmap(
-    #     file=file_digits_and_scale,
-    #     to_plot="val_loss",
-    #     plot_over="epoch",
-    #     min_digits=7,
-    #     show=False,
-    # )
+    plot_fourier_transform_of_loss_curves_heatmap(
+        file=file_digits_and_scale,
+        to_plot="val_loss",
+        plot_over="epoch",
+        min_digits=7,
+        show=False,
+    )
     # plot_mean_fourier_freq_over_gradient_rounding_digits(
     #     file=file_digits_and_scale,
     #     to_plot="val_loss",
@@ -710,10 +715,10 @@ if __name__ == "__main__":
     #     min_digits=7,
     #     show=True,
     # )
-    heatmap_l2_dist_to_largest_model(
-        file=file_digits_and_scale,
-        to_plot="val_loss",
-        min_digits=6,
-        show=True,
-        measure="L1",
-    )
+    # heatmap_l2_dist_to_largest_model(
+    #     file=file_digits_and_scale,
+    #     to_plot="val_loss",
+    #     min_digits=6,
+    #     show=True,
+    #     measure="L1",
+    # )
